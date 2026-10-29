@@ -255,6 +255,12 @@ type Manager struct {
 const (
 	settingTrafficCapture      = "traffic_capture"
 	settingAgentTrafficBinding = "agent_traffic_binding"
+	// settingStrixEvidenceSync gates阶段B cross-tool-evidence-sync: when true the
+	// engine periodically pulls strix findings + their Caido traffic and snapshots
+	// them into ARTEX evidence/findings bound to the task. Default off; orthogonal
+	// to (and additionally gated by) the strix MCP row being enabled, so it can be
+	// rolled back independently without breaking the native closed loop (design D7).
+	settingStrixEvidenceSync = "strix_evidence_sync"
 	settingWebSearchOn         = "web_search_enabled"
 	settingWebSearchBackend    = "web_search_backend"
 	settingBraveKey            = "brave_search_api_key"

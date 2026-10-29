@@ -1226,6 +1226,20 @@ CREATE TABLE IF NOT EXISTS finding_traffic_bindings (
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_order ON finding_traffic_bindings(finding_id, position, id);
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_snapshot ON finding_traffic_bindings(snapshot_id);
 
+-- strix 执行面回流 finding 的幂等表(阶段 B, cross-tool-evidence-sync)。周期性同步会
+-- 反复拉取同一 strix finding,这里用 (task_id, external_id) 做去重键:已同步的 strix
+-- finding 不再重复写入 ARTEX findings,只记录它映射到的 ARTEX finding_id。外部 ID 幂等
+-- 之上,ARTEX 自身的 finding-cases 归并仍为最终权威(design D6 / Open Question)。
+-- finding 被删时级联清理,这样同一 strix finding 可在重建任务后重新回流。
+CREATE TABLE IF NOT EXISTS strix_finding_sync (
+    task_id     BIGINT NOT NULL,
+    external_id TEXT NOT NULL,
+    finding_id  BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (task_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_strix_finding_sync_finding ON strix_finding_sync(finding_id);
+
 -- =====================================================================
 -- M. 后端日志持久化
 -- =====================================================================

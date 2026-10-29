@@ -249,9 +249,14 @@ func (e *Engine) StopTask(taskID string) {
 	e.deleting.Store(taskID, true)
 	e.deleteMu.Unlock()
 
-	// 3.3: reclaim the task's strix sandbox container at the teardown boundary
-	// (no-op unless the strix MCP row is enabled). Best-effort; failures are logged.
-	go e.closeStrixSession(taskID)
+	// 3.3 + 阶段B: at the teardown boundary, run one final evidence sync BEFORE
+	// reclaiming the sandbox (close_session destroys the Caido container and its
+	// traffic history), then reclaim it. Both no-op unless the strix MCP row is
+	// enabled. Best-effort; failures are logged.
+	go func() {
+		e.finalStrixEvidenceSync(taskID)
+		e.closeStrixSession(taskID)
+	}()
 
 	e.cancelExec(taskID, agent.AbortTaskDeleted)
 	e.runtimeMu.Lock()
@@ -768,6 +773,10 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	// unless the strix MCP row is enabled). Best-effort + async so a slow/unreachable
 	// execution plane never delays planner/worker startup (3.4 降级).
 	go e.openStrixSession(ctx, t.ID)
+	// 阶段B: periodically pull strix execution evidence (findings + Caido traffic)
+	// into ARTEX while the task runs (no-op unless strix MCP + strix_evidence_sync
+	// are both on). Bound to rt.ctx so StopTask's cancel tears it down.
+	go e.strixEvidenceSyncLoop(rt.ctx, t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
 	for i := 0; i < workers; i++ {
 		name := fmt.Sprintf("work#%d", i+1)

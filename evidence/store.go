@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -190,6 +191,100 @@ func (s *Store) Record(ctx context.Context, in db.RecordFindingInput, refs []db.
 		}
 		out, err = db.RecordFindingTx(ctx, tx, in, prepared)
 		return err
+	})
+	return
+}
+
+// ExternalExchange is one HTTP exchange captured outside ARTEX's own traffic
+// store (阶段 B: strix/Caido execution traffic). Unlike prepare(), which reads
+// bodies back from the local traffic index by id, these raw bytes arrive inline
+// (from the strix MCP export) and are written straight into the content-addressed
+// evidence blob store, so strix execution traffic is preserved as task/finding-
+// bound evidence without ARTEX ever proxying it (design D5: evidence decoupled
+// from the disposable traffic index; no double-capture with the embedded mitmproxy
+// since strix traffic goes through Caido, not ARTEX).
+type ExternalExchange struct {
+	SourceID    string // provenance id, e.g. "strix:<caido request id>"
+	CapturedAt  int64
+	URL         string
+	Method      string
+	Status      int
+	ContentType string
+	Request     []byte // full raw request bytes (head + body)
+	Response    []byte // full raw response bytes (head + body)
+	Role        string // binding role (baseline/proof/verification/supporting)
+	Note        string
+}
+
+// splitHTTPMessage separates a raw HTTP message into its header block (stored in
+// the snapshot's *_head text column, matching record()'s on-wire layout) and its
+// body bytes (written to the content-addressed blob). A message with no blank-line
+// separator is treated as all-head with an empty body.
+func splitHTTPMessage(raw []byte) (head string, body []byte) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		return string(raw[:i]), raw[i+4:]
+	}
+	if i := bytes.Index(raw, []byte("\n\n")); i >= 0 {
+		return string(raw[:i]), raw[i+2:]
+	}
+	return string(raw), nil
+}
+
+// prepareExternal turns inline raw exchanges into snapshots whose bodies already
+// live in the blob store. Mirrors prepare() but sources bytes from the caller
+// rather than the local traffic index; the snapshot ID is still the content hash
+// of the normalized metadata, so re-syncing identical traffic is idempotent.
+func (s *Store) prepareExternal(exchanges []ExternalExchange) ([]db.PreparedTrafficEvidence, error) {
+	out := make([]db.PreparedTrafficEvidence, 0, len(exchanges))
+	for _, ex := range exchanges {
+		role := ex.Role
+		if role == "" {
+			role = "supporting"
+		}
+		if !db.ValidTrafficRole(role) {
+			return nil, fmt.Errorf("无效的流量用途 %q", role)
+		}
+		reqHead, reqBody := splitHTTPMessage(ex.Request)
+		respHead, respBody := splitHTTPMessage(ex.Response)
+		rh, err := s.writeBody(bytes.NewReader(reqBody), int64(len(reqBody)), "")
+		if err != nil {
+			return nil, err
+		}
+		ph, err := s.writeBody(bytes.NewReader(respBody), int64(len(respBody)), "")
+		if err != nil {
+			return nil, err
+		}
+		v := db.TrafficEvidenceSnapshot{SourceTrafficID: ex.SourceID, CapturedAt: ex.CapturedAt, URL: ex.URL, Method: ex.Method, Status: ex.Status, ContentType: ex.ContentType,
+			ReqHead: reqHead, RespHead: respHead, ReqHash: rh, RespHash: ph, ReqLen: int64(len(reqBody)), RespLen: int64(len(respBody))}
+		v = v.Normalize()
+		v.ID = db.TrafficSnapshotID(v)
+		out = append(out, db.PreparedTrafficEvidence{Ref: db.TrafficRef{TrafficID: ex.SourceID, Role: role, Note: ex.Note}, Snapshot: v})
+	}
+	return out, nil
+}
+
+// RecordExternal atomically creates a finding (+ exploration node/edge) and binds
+// the given inline exchanges as its evidence, all under the evidence lock. The
+// optional after hook runs inside the same transaction right after the finding is
+// recorded, so a caller can register side state (e.g. the strix→ARTEX sync
+// mapping) with the same atomic guarantee as the finding write itself.
+func (s *Store) RecordExternal(ctx context.Context, in db.RecordFindingInput, exchanges []ExternalExchange, after func(tx *sql.Tx, f *db.RecordedFinding) error) (out *db.RecordedFinding, err error) {
+	err = s.DB.WithEvidenceTx(ctx, func(tx *sql.Tx) error {
+		if err := db.LockTaskEvidenceTx(tx, in.TaskID); err != nil {
+			return err
+		}
+		prepared, err := s.prepareExternal(exchanges)
+		if err != nil {
+			return err
+		}
+		out, err = db.RecordFindingTx(ctx, tx, in, prepared)
+		if err != nil {
+			return err
+		}
+		if after != nil {
+			return after(tx, out)
+		}
+		return nil
 	})
 	return
 }
