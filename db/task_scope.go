@@ -299,8 +299,10 @@ func (s *AssetStore) CoverageEnabled(taskID int64) bool {
 	return enabled
 }
 
-// task_scope→assets match predicate, reused by the count / by-type / untested queries. $1=taskID.
-const covTargetCTE = `
+// task_scope→assets match predicate (the in-scope asset set for a task). $1=taskID.
+// Kept standalone so callers that only need the target set (e.g. strix scope push)
+// can reuse the exact same matching without the exploration-anchor join.
+const covTargetOnlyCTE = `
 target AS (
   SELECT DISTINCT a.id, a.type,
          COALESCE(a.url, a.domain, a.ip, a.app_name, a.root_domain, '') AS label
@@ -315,13 +317,47 @@ target AS (
          OR lower(regexp_replace(COALESCE(a.app_icp,''), '[[:space:]]+', '', 'g')) = ts.value
        ))
   )
-),
+)`
+
+// task_scope→assets match + the tested set, reused by the count / by-type /
+// untested queries. $1=taskID, $2=expID.
+const covTargetCTE = covTargetOnlyCTE + `,
 tested AS (
   SELECT DISTINCT ea.asset_id
   FROM exploration_anchors ea
   JOIN exploration_nodes en ON en.id = ea.node_id
   WHERE en.exploration_id = $2 AND en.kind = 'fact'
 )`
+
+// InScopeAssetHosts returns the distinct host targets (domains and IPs) of a
+// task's in-scope assets — the concrete asset-graph target subset reachable under
+// the task's authorization range. Used to enrich the strix scope push so that
+// company / ICP-scoped tasks (whose task_scope rows carry no host of their own)
+// still ship a concrete sandbox boundary. taskID<=0 → empty.
+func (s *AssetStore) InScopeAssetHosts(taskID int64) ([]string, error) {
+	if taskID <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`WITH `+covTargetOnlyCTE+`
+SELECT DISTINCT host FROM (
+  SELECT COALESCE(a.domain,'') AS host FROM assets a JOIN target t ON t.id=a.id
+  UNION ALL
+  SELECT COALESCE(a.ip,'') AS host FROM assets a JOIN target t ON t.id=a.id
+) h WHERE host <> '' ORDER BY host`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
 
 // TaskCoverage computes rough per-type coverage for a task. taskID indexes
 // task_scope + assets; expID indexes the fact anchors. Reference figure only.

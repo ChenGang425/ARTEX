@@ -95,12 +95,19 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					log.Printf("[mcp] %s tools/list 失败: %v", m.Name, err)
 					continue
 				}
+				// 阶段C: the strix spawn_subagent tool is additionally gated by the
+				// strix_subagent_bridge setting (default off) so子agent接缝 can be rolled
+				// out / back independently of the rest of the strix integration (D7).
+				strixSubagentOn := m.Name == strixMCPServerName && pg.GetBool(settingStrixSubagentBridge, false)
 				for _, t := range ts {
 					// strix sandbox tools get the ARTEX task's session_id bound
 					// transparently (3.3): the model never supplies it, the engine
 					// guarantees the matching sandbox session exists. Name is
 					// preserved so visibility/unlock bookkeeping below is unaffected.
 					if m.Name == strixMCPServerName {
+						if t.Name() == strixSpawnSubagentTool && !strixSubagentOn {
+							continue // 子agent接缝未开启 → 不装配该工具
+						}
 						t = injectStrixSession(t, strixSessionID(ctx))
 					}
 					extra = append(extra, t)

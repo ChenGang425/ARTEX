@@ -261,6 +261,21 @@ const (
 	// to (and additionally gated by) the strix MCP row being enabled, so it can be
 	// rolled back independently without breaking the native closed loop (design D7).
 	settingStrixEvidenceSync = "strix_evidence_sync"
+	// settingStrixScopeBridge gates阶段C asset-scope-exploration-bridge: when true
+	// the engine pushes the task's authorization range (task_scope domains/CIDRs +
+	// its in-scope asset hosts) to the strix sandbox session via set_scope at task
+	// start, so sandbox tooling carries an explicit scope boundary and越界 targets
+	// are flagged (记录告警). Default off; additionally gated by the strix MCP row
+	// being enabled, so it rolls back independently without touching the native
+	// closed loop (design D7).
+	settingStrixScopeBridge = "strix_scope_bridge"
+	// settingStrixSubagentBridge gates阶段C 的 strix 子 agent 接缝: when true the
+	// Worker's mcp__strix__spawn_subagent tool is装配 (so ARTEX 的并行探索意图可映射为
+	// strix create_agent 子 agent)，并在 task 启动记录意图→子 agent 映射。审批以父 task
+	// 为粒度(spawn 调用本身经 guard 拦截)。Default off; additionally gated by the strix
+	// MCP row being enabled, so it rolls back independently (design D7). 真实派生仍取决
+	// 于 strix 侧 per-session agent runtime 是否点亮(方案A 前向兼容: 未点亮则 deferred)。
+	settingStrixSubagentBridge = "strix_subagent_bridge"
 	settingWebSearchOn         = "web_search_enabled"
 	settingWebSearchBackend    = "web_search_backend"
 	settingBraveKey            = "brave_search_api_key"

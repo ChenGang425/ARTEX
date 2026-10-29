@@ -773,6 +773,15 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	// unless the strix MCP row is enabled). Best-effort + async so a slow/unreachable
 	// execution plane never delays planner/worker startup (3.4 降级).
 	go e.openStrixSession(ctx, t.ID)
+	// 阶段C: push the task's authorization range to its strix sandbox session as
+	// scope (no-op unless strix MCP + strix_scope_bridge are both on). Async so a
+	// slow execution plane never delays startup; set_scope stores independently of
+	// open_session so ordering with the open goroutine above is race-free.
+	go e.pushStrixScope(ctx, t.ID)
+	// 阶段C: record the task's parallel-intent → strix 子 agent 映射 (no-op unless
+	// strix MCP + strix_subagent_bridge are both on). Observability only — actual
+	// spawns stay guard-gated Worker tool calls (6.4), never auto-issued here.
+	go e.logStrixParallelIntents(t.ID)
 	// 阶段B: periodically pull strix execution evidence (findings + Caido traffic)
 	// into ARTEX while the task runs (no-op unless strix MCP + strix_evidence_sync
 	// are both on). Bound to rt.ctx so StopTask's cancel tears it down.

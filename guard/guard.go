@@ -87,6 +87,17 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		}
 		_ = json.Unmarshal(ev.Input, &in)
 		cmd = "agent-browser " + in.Args
+	case "mcp__strix__spawn_subagent":
+		// 阶段C: surface the child agent's name + task so the审批页/audit shows what a
+		// subagent spawn will do (HITL granularity is the parent task — this spawn call
+		// itself is intercepted here, design D4). The subagent's own internal tool calls
+		// run inside strix and are governed by approving this spawn, not re-gated.
+		var in struct {
+			Name string `json:"name"`
+			Task string `json:"task"`
+		}
+		_ = json.Unmarshal(ev.Input, &in)
+		cmd = "spawn_subagent " + in.Name + ": " + in.Task
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
 	return g.applyIntercept(ctx, ev)
