@@ -362,7 +362,8 @@ func knownScriptExtension(path string) bool {
 
 func captureScripts(workingDir, tool string, arguments json.RawMessage) ([]ReviewScript, string) {
 	switch tool {
-	case "Bash", "shell_open", "shell_send", "command", "script":
+	case "Bash", "shell_open", "shell_send", "command", "script",
+		"mcp__strix__exec_command":
 	default:
 		return nil, "not_applicable"
 	}
@@ -371,8 +372,13 @@ func captureScripts(workingDir, tool string, arguments json.RawMessage) ([]Revie
 		return nil, "not_applicable"
 	}
 	key := "command"
-	if tool == "shell_send" {
+	switch tool {
+	case "shell_send":
 		key = "text"
+	case "mcp__strix__exec_command":
+		// strix sandbox shell command rides in `cmd`; audit it with the same
+		// static analysis as Bash so high-risk commands get ask/deny, not blanket allow.
+		key = "cmd"
 	}
 	command, _ := fields[key].(string)
 	if strings.TrimSpace(command) == "" {

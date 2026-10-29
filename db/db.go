@@ -264,11 +264,28 @@ ON CONFLICT (name) DO NOTHING`,
 		`["@playwright/mcp","--headless"]`); err != nil {
 		return fmt.Errorf("seed browser mcp: %w", err)
 	}
+	// Seed the strix sandbox-execution MCP (Streamable HTTP) once — DISABLED by
+	// default: this is the阶段A feature flag (design D7). Enabling it (+ binding
+	// agent visibility) routes real pentest tooling through strix's Kali sandbox
+	// as mcp__strix__*; disabling it falls back to ARTEX-native tools with zero
+	//闭环 impact. URL points at the strix-mcp default endpoint; set an
+	// Authorization header in env via the UI for token auth (design task 7.1).
+	// Insert only if absent so user edits (url/env/enabled/visibility) survive restart.
+	if _, err := d.Exec(`
+INSERT INTO mcp_servers(name, transport, url, env, enabled)
+VALUES ('strix', 'http', $1, '{}', false)
+ON CONFLICT (name) DO NOTHING`,
+		`http://127.0.0.1:8000/mcp`); err != nil {
+		return fmt.Errorf("seed strix mcp: %w", err)
+	}
 	// NOTE: the placeholder ScopeSentry data-source MCP (empty URL + empty X-API-Key,
 	// disabled) is seeded directly in schema.sql §F so a raw `psql < schema.sql` init
 	// also gets it. schema.sql is Exec'd on every startup, so it stays idempotent.
 	if err := d.seedBuiltinSkillVisibility(); err != nil {
 		return fmt.Errorf("seed skill visibility: %w", err)
+	}
+	if err := d.seedStrixVisibility(); err != nil {
+		return fmt.Errorf("seed strix visibility: %w", err)
 	}
 	if err := d.seedDefaultInterceptRules(); err != nil {
 		return fmt.Errorf("seed intercept rules: %w", err)
@@ -340,6 +357,34 @@ ON CONFLICT (agent_id, skill_name) DO NOTHING`, key, skillName); err != nil {
 		}
 	}
 	return nil
+}
+
+// strixVisibilityAgents 是默认被授予「可见 strix 沙箱 MCP」的执行类 agent：
+// worker（编排循环里领取意图执行）与 pentest（对话页独立渗透）。
+var strixVisibilityAgents = []string{"worker", "pentest"}
+
+// seedStrixVisibility 让执行类 agent 默认可见 strix 沙箱 MCP，使「启用 strix MCP 行」
+// 这一个 feature flag 自身即足够生效。否则 strix 工具虽被发现，却因 agent_visibility
+// 无授权行而不进 worker 工具装配（server/assembly.go），worker 会静默退回原生 Bash
+// ——即 change 的 task 3.5 所记联调陷阱。
+//
+// 用 settings flag 一次性门控，而非单纯 ON CONFLICT：因为 ToggleVisibility 关闭时是
+// DELETE 行（见 config.go），若无门控，用户事后撤销的可见性会在重启时被重新插回而「复活」。
+// 一次性 seed 与 seedDefaultAssetInterceptRules 策略一致，尊重用户后续 toggle-off。
+// 可见性与 enabled 正交：这里仅授权可见，strix 行仍默认 disabled，真正的接入开关不变。
+func (d *DB) seedStrixVisibility() error {
+	if v, _, _ := d.GetSetting("strix_mcp_visibility_v1"); v == "done" {
+		return nil
+	}
+	for _, key := range strixVisibilityAgents {
+		if _, err := d.Exec(`
+INSERT INTO agent_visibility(agent_id, resource_kind, resource_id, mcp_tool_name, enabled)
+SELECT a.id, 'mcp', m.id, '', true FROM agents a, mcp_servers m WHERE a.key=$1 AND m.name='strix'
+ON CONFLICT (agent_id, resource_kind, resource_id, mcp_tool_name) DO NOTHING`, key); err != nil {
+			return fmt.Errorf("strix visibility → agent %s: %w", key, err)
+		}
+	}
+	return d.SetSetting("strix_mcp_visibility_v1", "done")
 }
 
 // seedDefaultInterceptRules inserts built-in safety intercept rules once on

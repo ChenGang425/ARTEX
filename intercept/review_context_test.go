@@ -60,6 +60,34 @@ func TestReviewInputIgnoresAuditHistoryAndPreservesCurrentCall(t *testing.T) {
 	}
 }
 
+// strix sandbox exec must be reviewed with the same shell static analysis as
+// Bash: its command rides in `cmd`, so captureScripts has to recognize the
+// mcp__strix__exec_command tool and resolve script references, while a non-shell
+// strix tool (e.g. list_requests) stays not_applicable.
+func TestReviewInputCapturesStrixExecCommand(t *testing.T) {
+	ctx := WithReviewContext(t.Context(), "/tmp/strix-run", ReviewBackground{})
+	execArgs := json.RawMessage(`{"session_id":"t1","cmd":"bash /workspace/payload.sh"}`)
+	in, err := BuildReviewInput(ctx, "mcp__strix__exec_command", execArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.ScriptCaptureStatus == "not_applicable" {
+		t.Fatalf("exec_command cmd was not routed through shell static analysis: %+v", in)
+	}
+	if len(in.Scripts) == 0 {
+		t.Fatal("expected a script reference for bash /workspace/payload.sh")
+	}
+	if string(in.Arguments) != string(execArgs) {
+		t.Fatal("arguments must be preserved verbatim")
+	}
+
+	// A proxy/non-shell strix tool must not be forced through script capture.
+	proxyArgs := json.RawMessage(`{"session_id":"t1","request_id":"r1"}`)
+	if p, _ := BuildReviewInput(ctx, "mcp__strix__list_requests", proxyArgs); p.ScriptCaptureStatus != "not_applicable" {
+		t.Fatalf("non-shell strix tool should stay not_applicable, got %q", p.ScriptCaptureStatus)
+	}
+}
+
 func TestReviewInputExplicitBackgroundOnly(t *testing.T) {
 	for _, source := range []string{BackgroundUserMessage, "worker_summary", "", "scheduler"} {
 		t.Run(source, func(t *testing.T) {

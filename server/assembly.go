@@ -96,6 +96,13 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					continue
 				}
 				for _, t := range ts {
+					// strix sandbox tools get the ARTEX task's session_id bound
+					// transparently (3.3): the model never supplies it, the engine
+					// guarantees the matching sandbox session exists. Name is
+					// preserved so visibility/unlock bookkeeping below is unaffected.
+					if m.Name == strixMCPServerName {
+						t = injectStrixSession(t, strixSessionID(ctx))
+					}
 					extra = append(extra, t)
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())

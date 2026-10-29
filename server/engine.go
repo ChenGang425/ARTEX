@@ -249,6 +249,10 @@ func (e *Engine) StopTask(taskID string) {
 	e.deleting.Store(taskID, true)
 	e.deleteMu.Unlock()
 
+	// 3.3: reclaim the task's strix sandbox container at the teardown boundary
+	// (no-op unless the strix MCP row is enabled). Best-effort; failures are logged.
+	go e.closeStrixSession(taskID)
+
 	e.cancelExec(taskID, agent.AbortTaskDeleted)
 	e.runtimeMu.Lock()
 	rt := e.runtimes[taskID]
@@ -760,6 +764,10 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 	rt := e.registerTaskRoutines(ctx, t.ID, 1+workers)
 	e.deleteMu.RUnlock()
 	e.touch(t.ID)
+	// 3.3: bind a strix sandbox session to this task at the start boundary (no-op
+	// unless the strix MCP row is enabled). Best-effort + async so a slow/unreachable
+	// execution plane never delays planner/worker startup (3.4 降级).
+	go e.openStrixSession(ctx, t.ID)
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.plannerLoop(loopCtx, t) })
 	for i := 0; i < workers; i++ {
 		name := fmt.Sprintf("work#%d", i+1)

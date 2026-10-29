@@ -73,6 +73,20 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		}
 		_ = json.Unmarshal(ev.Input, &in)
 		cmd = in.Text
+	case "mcp__strix__exec_command":
+		// strix sandbox exec: the real command is in `cmd`; surface it so the audit
+		// log and intercept static analysis see the shell semantics, not an opaque call.
+		var in struct {
+			Cmd string `json:"cmd"`
+		}
+		_ = json.Unmarshal(ev.Input, &in)
+		cmd = in.Cmd
+	case "mcp__strix__agent_browser":
+		var in struct {
+			Args string `json:"args"`
+		}
+		_ = json.Unmarshal(ev.Input, &in)
+		cmd = "agent-browser " + in.Args
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
 	return g.applyIntercept(ctx, ev)
